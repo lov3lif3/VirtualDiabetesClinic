@@ -4,9 +4,9 @@ import json
 import joblib
 import numpy as np
 from sklearn.datasets import load_diabetes
-from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
@@ -21,8 +21,8 @@ X_train, X_test, y_train, y_test = train_test_split(
 
 # Define pipeline
 pipeline = Pipeline([
-    ("scaler", StandardScaler()),
-    ("model", LinearRegression())
+    ("scaler", StandardScaler()),  # Feature scaling
+    ("model", RandomForestRegressor(n_estimators=100, random_state=42))  # Using RandomForestRegressor
 ])
 
 # Train
@@ -37,11 +37,26 @@ print(f"RMSE: {rmse:.2f}")
 artifacts_dir = Path("artifacts")
 artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-joblib.dump(pipeline, artifacts_dir / "model.joblib")
+# Save the trained model
+joblib.dump(pipeline, artifacts_dir / "model.pkl")
 
+# Log feature importance (optional)
+feature_importance = pipeline.named_steps["model"].feature_importances_
+
+# Save metrics (RMSE, Feature Importance)
+metrics = {
+    "rmse": rmse,
+    "feature_importance": feature_importance.tolist(),  # Convert to list for JSON serializing
+    "trained_at": datetime.now(timezone.utc).isoformat()
+}
+
+# Save metrics to JSON
+(artifacts_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+
+# Save metadata
 meta = {
-    "pipeline": "baseline",
-    "version": "0.1.0",
+    "pipeline": "RandomForestRegressor",
+    "version": "0.2.0",
     "rmse": rmse,
     "trained_at": datetime.now(timezone.utc).isoformat()
 }
