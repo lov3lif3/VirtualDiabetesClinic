@@ -55,14 +55,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & Push (MODEL_VERSION from tag)
+      - name: Build & Push (tag-driven)
         uses: docker/build-push-action@v5
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.meta.outputs.tags }}   # includes :v0.1 when you push tag v0.1
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
             MODEL_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
+
