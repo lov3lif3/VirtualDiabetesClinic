@@ -3,15 +3,19 @@ name: CI & Publish
 on:
   push:
     branches: [main, master]
-    tags: ['v*']     # push tag v0.1 -> image :v0.1 and MODEL_VERSION=v0.1
+    tags: ['v*']     # push tag v0.1 -> image :v0.1 and baked MODEL_VERSION=v0.1
   pull_request:
 
 permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-test-push:
+  build-test-publish:
     runs-on: ubuntu-latest
 
     steps:
@@ -24,16 +28,34 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install & Test
+      # ---- Lint ----
+      - name: Lint (ruff)
         run: |
           python -m pip install -U pip
+          pip install ruff
+          ruff check .
+
+      # ---- Install, Train, Test ----
+      - name: Install, Train, Unit Tests
+        env:
+          MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
+        run: |
           pip install -r requirements.txt pytest
           python src/train.py
           PYTHONPATH=$(pwd) pytest -q
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+      # ---- Upload training artifacts (reproducibility) ----
+      - name: Upload training artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: |
+            artifacts/model.joblib
+            artifacts/meta.json
+            artifacts/metrics.json
+          if-no-files-found: error
 
+      # ---- Docker tagging metadata ----
       - name: Docker meta (tags/labels)
         id: meta
         uses: docker/metadata-action@v5
@@ -47,6 +69,39 @@ jobs:
             type=sha,prefix=sha-         # :sha-<short>
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ---- Build (for smoke), no push ----
+      - name: Build (load for smoke)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          push: false
+          tags: local/test:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            MODEL_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
+
+      # ---- Smoke test container ----
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          CID=smoke
+          docker run -d --name "$CID" -p 8000:8000 local/test:latest
+          trap 'docker logs "$CID" || true; docker rm -f "$CID" || true' EXIT
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8000/health >/dev/null; then
+              echo "Healthcheck OK"; exit 0
+            fi
+            sleep 1
+          done
+          echo "Healthcheck failed"; exit 1
+
+      # ---- Login then Build & Push to GHCR ----
       - name: Login to GHCR
         if: ${{ github.event_name != 'pull_request' }}
         uses: docker/login-action@v3
@@ -56,13 +111,26 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & Push (tag-driven)
+        if: ${{ github.event_name != 'pull_request' }}
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}   # includes :v0.1 when you push tag v0.1
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
             MODEL_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
+
+      # ---- Create GitHub Release on tag, attach metrics/meta ----
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/metrics.json
+            artifacts/meta.json
