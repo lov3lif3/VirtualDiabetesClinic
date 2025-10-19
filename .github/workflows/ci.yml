@@ -1,22 +1,22 @@
-name: CI & Publish
+name: CI Pipeline
 
 on:
   push:
-    branches: [main, master]
-    tags: ['v*']          # <-- when you push a tag like v0.1, image will be :v0.1
+    branches: [ "main", "master" ]
   pull_request:
+    branches: [ "main", "master" ]
 
 permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build-test-publish:
+  ci:
     runs-on: ubuntu-latest
+    env:
+      REPO_LC: ${{ github.repository }} # will be lowercased in shell
+      TAG_BRANCH: ${{ github.ref_name }}
+      TAG_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout
@@ -26,50 +26,28 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
-      - name: Install & Test
+      - name: Test (install, train, unit tests)
         run: |
           python -m pip install -U pip
           pip install -r requirements.txt pytest
           python src/train.py
           PYTHONPATH=$(pwd) pytest -q
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Docker meta (tags & labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ format('ghcr.io/{0}', toLower(github.repository)) }}
-          flavor: |
-            latest=false
-          tags: |
-            type=ref,event=tag           # => v0.1 -> :v0.1
-            type=ref,event=branch        # => main -> :main (for branch pushes)
-            type=sha,prefix=sha-         # => :sha-<short>
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build (load for smoke test, no push)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          load: true                     # produce a local docker image for run
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Build Docker image
+        run: |
+          REPO_LC=$(echo "${REPO_LC}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${REPO_LC}"
+          docker build -t "${IMAGE}:${TAG_BRANCH}" -t "${IMAGE}:${TAG_SHA}" .
 
       - name: Smoke test
         shell: bash
         run: |
           set -euo pipefail
-          # pick the first produced tag for local run
-          IMG="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
+          REPO_LC=$(echo "${REPO_LC}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${REPO_LC}:${TAG_BRANCH}"
           CID=ci-smoke
-          docker run -d --name "$CID" -p 8000:8000 "$IMG"
+          docker run -d --name "$CID" -p 8000:8000 "$IMAGE"
           trap 'docker logs "$CID" || true; docker rm -f "$CID" || true' EXIT
           for i in {1..30}; do
             if curl -fsS http://localhost:8000/health >/dev/null; then
@@ -78,9 +56,10 @@ jobs:
             fi
             sleep 1
           done
-          echo "Healthcheck failed"; exit 1
+          echo "Healthcheck failed"
+          exit 1
 
-      - name: Login to GHCR
+      - name: Log in to GHCR
         if: ${{ github.event_name != 'pull_request' }}
         uses: docker/login-action@v3
         with:
@@ -88,13 +67,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & Push (uses cache; tags from meta)
+      - name: Push image
         if: ${{ github.event_name != 'pull_request' }}
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}     # includes :v0.1 when you push tag v0.1
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: |
+          REPO_LC=$(echo "${REPO_LC}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${REPO_LC}"
+          docker push "${IMAGE}:${TAG_BRANCH}"
+          docker push "${IMAGE}:${TAG_SHA}"
