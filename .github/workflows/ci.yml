@@ -38,7 +38,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ format('ghcr.io/{0}', toLower(github.repository)) }}
+          images: ${{ format('ghcr.io/{0}', github.repository | toLower) }}
           flavor: |
             latest=false
           tags: |
@@ -66,4 +66,3 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             MODEL_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
-
