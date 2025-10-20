@@ -9,7 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src
-COPY models/model_v${MODEL_VERSION}.joblib ./models/model_v${MODEL_VERSION}.joblib
+COPY models/model_${MODEL_VERSION}.joblib ./models/model_${MODEL_VERSION}.joblib
 COPY models/feature_list.json ./models/feature_list.json
 
 EXPOSE 8000
