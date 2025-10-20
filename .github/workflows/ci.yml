@@ -3,7 +3,7 @@ name: CI & Publish
 on:
   push:
     branches: [main, master]
-    tags: ['v*']     # push tag v0.1 -> image :v0.1 and baked MODEL_VERSION=0.1 (no leading 'v')
+    tags: ['v*'] # push tag v0.1 -> image :v0.1 and baked MODEL_VERSION=v0.1
   pull_request:
 
 permissions:
@@ -17,8 +17,9 @@ concurrency:
 jobs:
   build-test-publish:
     runs-on: ubuntu-latest
+
     env:
-      MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name && github.ref_name.slice(1) || '0.1' }}
+      MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
 
     steps:
       - name: Checkout
@@ -30,21 +31,18 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      # ---- Lint ----
       - name: Lint (ruff)
         run: |
           python -m pip install -U pip
           pip install ruff
           ruff check .
 
-      # ---- Install, Train, Unit Tests ----
       - name: Install, Train, Unit Tests
         run: |
           pip install -r requirements.txt pytest
           python src/train.py --model linear
           PYTHONPATH=$(pwd) pytest -q
 
-      # ---- Upload training artifacts (reproducibility) ----
       - name: Upload training artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -57,21 +55,27 @@ jobs:
             models/feature_list.json
           if-no-files-found: error
 
-      # ---- Docker tagging metadata ----
       - name: Docker meta (tags/labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=ref,event=tag           # v0.1 -> :v0.1
-            type=ref,event=branch        # main -> :main
+            type=ref,event=tag
+            type=ref,event=branch
+            type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ---- Build (for smoke), no push ----
+      - name: Check if model file exists
+        run: |
+          if [ ! -f models/model_v${MODEL_VERSION}.joblib ]; then
+            echo "Model file models/model_v${MODEL_VERSION}.joblib not found!"
+            exit 1
+          fi
+
       - name: Build (load for smoke)
         uses: docker/build-push-action@v5
         with:
@@ -84,7 +88,6 @@ jobs:
           build-args: |
             MODEL_VERSION=${{ env.MODEL_VERSION }}
 
-      # ---- Smoke test container ----
       - name: Smoke test
         shell: bash
         run: |
@@ -94,13 +97,14 @@ jobs:
           trap 'docker logs "$CID" || true; docker rm -f "$CID" || true' EXIT
           for i in {1..30}; do
             if curl -fsS http://localhost:8000/health >/dev/null; then
-              echo "Healthcheck OK"; exit 0
+              echo "Healthcheck OK"
+              exit 0
             fi
             sleep 1
           done
-          echo "Healthcheck failed"; exit 1
+          echo "Healthcheck failed"
+          exit 1
 
-      # ---- Login then Build & Push to GHCR ----
       - name: Login to GHCR
         if: ${{ github.event_name != 'pull_request' }}
         uses: docker/login-action@v3
@@ -109,7 +113,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & Push (tag-driven)
+      - name: Build & Push
         if: ${{ github.event_name != 'pull_request' }}
         uses: docker/build-push-action@v5
         with:
@@ -122,7 +126,6 @@ jobs:
           build-args: |
             MODEL_VERSION=${{ env.MODEL_VERSION }}
 
-      # ---- Create GitHub Release on tag, attach metrics/meta ----
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
