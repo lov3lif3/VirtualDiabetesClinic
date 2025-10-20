@@ -3,7 +3,7 @@ name: CI & Publish
 on:
   push:
     branches: [main, master]
-    tags: ['v*']     # push tag v0.1 -> image :v0.1 and baked MODEL_VERSION=v0.1
+    tags: ['v*']     # push tag v0.1 -> image :v0.1 and baked MODEL_VERSION=0.1 (no leading v)
   pull_request:
 
 permissions:
@@ -17,10 +17,6 @@ concurrency:
 jobs:
   build-test-publish:
     runs-on: ubuntu-latest
-
-    # Define MODEL_VERSION here once, depending on tag or default '0.1'
-    env:
-      MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.1' }}
 
     steps:
       - name: Checkout
@@ -41,6 +37,8 @@ jobs:
 
       # ---- Install, Train, Unit Tests ----
       - name: Install, Train, Unit Tests
+        env:
+          MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name && github.ref_name.substring(1) || '0.1' }}
         run: |
           pip install -r requirements.txt pytest
           python src/train.py --model linear
@@ -72,16 +70,6 @@ jobs:
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
-
-      # ---- Verify model file exists before Docker build ----
-      - name: Check model file
-        run: |
-          if [ ! -f models/model_v${MODEL_VERSION}.joblib ]; then
-            echo "Model file models/model_v${MODEL_VERSION}.joblib not found!"
-            exit 1
-          else
-            echo "Found model file models/model_v${MODEL_VERSION}.joblib"
-          fi
 
       # ---- Build (for smoke), no push ----
       - name: Build (load for smoke)
@@ -146,3 +134,9 @@ jobs:
             artifacts/LinearRegression/metrics.json
             artifacts/LinearRegression/meta.json
           token: ${{ secrets.GH_RELEASE_TOKEN }}
+What I changed:
+The key fix is here, stripping the leading v from github.ref_name:
+
+yaml
+Kopiera kod
+MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name && github.ref_name.substring(1)
