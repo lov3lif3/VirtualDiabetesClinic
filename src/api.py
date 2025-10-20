@@ -1,19 +1,9 @@
-from fastapi import FastAPI
-from fastapi import HTTPException
-from fastapi import Request
-from fastapi import Depends
-
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from pydantic import Field
-
+from pydantic import BaseModel, Field
 from pathlib import Path
 from contextlib import asynccontextmanager
-
-import os
-import json
-import joblib
-import numpy as np
+import os, json, joblib, numpy as np
 
 ART_DIR = Path("artifacts")
 MODEL_PATH = ART_DIR / "model.joblib"
@@ -50,19 +40,15 @@ class PredictResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.model = None
-    version_env = os.getenv("MODEL_VERSION")
-    app.state.meta = {"version": version_env or "unknown"}
+    app.state.meta = {"version": "unknown"}
     try:
         if MODEL_PATH.exists():
             app.state.model = joblib.load(MODEL_PATH)
         if META_PATH.exists():
-            meta = json.loads(META_PATH.read_text())
-            if not version_env:
-                app.state.meta = {"version": meta.get("version", "unknown")}
+            app.state.meta = json.loads(META_PATH.read_text())
     except Exception:
         app.state.model = None
-        if not version_env:
-            app.state.meta = {"version": "unknown"}
+        app.state.meta = {"version": "unknown"}
     yield
 
 app = FastAPI(title="Virtual Diabetes Clinic Triage", version="0.1.0", lifespan=lifespan)
@@ -80,9 +66,9 @@ def health(req: Request):
     return {"status": "ok", "model_version": req.app.state.meta.get("version", "unknown")}
 
 @app.post("/predict", response_model=PredictResponse)
-def predict(payload: PredictRequest, request: Request, model=Depends(get_model)):
+def predict(req: PredictRequest, model=Depends(get_model), app_req: Request = None):
     try:
-        vec = payload.to_feature_list()
+        vec = req.to_feature_list()
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     X = np.asarray(vec, dtype=float).reshape(1, -1)
@@ -90,10 +76,7 @@ def predict(payload: PredictRequest, request: Request, model=Depends(get_model))
         y = float(model.predict(X)[0])
     except AttributeError:
         y = float(model(X)[0])
-    return PredictResponse(
-        prediction=y,
-        model_version=request.app.state.meta.get("version", "unknown"),
-    )
+    return PredictResponse(prediction=y, model_version=getattr(app_req.app.state, "meta", {}).get("version", "unknown"))
 
 @app.exception_handler(ValueError)
 async def _value_error_handler(_, exc: ValueError):
