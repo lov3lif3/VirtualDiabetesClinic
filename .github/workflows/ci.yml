@@ -35,13 +35,13 @@ jobs:
           pip install ruff
           ruff check .
 
-      # ---- Install, Train, Test ----
+      # ---- Install, Train, Unit Tests ----
       - name: Install, Train, Unit Tests
         env:
           MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
         run: |
           pip install -r requirements.txt pytest
-          python src/train.py
+          python src/train.py --model linear
           PYTHONPATH=$(pwd) pytest -q
 
       # ---- Upload training artifacts (reproducibility) ----
@@ -50,9 +50,11 @@ jobs:
         with:
           name: model-artifacts
           path: |
-            artifacts/model.joblib
-            artifacts/meta.json
-            artifacts/metrics.json
+            artifacts/LinearRegression/model.pkl
+            artifacts/LinearRegression/meta.json
+            artifacts/LinearRegression/metrics.json
+            models/model_v0.1.joblib
+            models/feature_list.json
           if-no-files-found: error
 
       # ---- Docker tagging metadata ----
@@ -60,9 +62,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ format('ghcr.io/{0}', github.repository | toLower) }}
-          flavor: |
-            latest=false
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=tag           # v0.1 -> :v0.1
             type=ref,event=branch        # main -> :main
@@ -132,5 +132,5 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            artifacts/metrics.json
-            artifacts/meta.json
+            artifacts/LinearRegression/metrics.json
+            artifacts/LinearRegression/meta.json
