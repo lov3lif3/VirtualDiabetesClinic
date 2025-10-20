@@ -3,11 +3,11 @@ name: CI & Publish
 on:
   push:
     branches: [main, master]
-    tags: ['v*'] # push tag v0.1 -> image :v0.1 and baked MODEL_VERSION=v0.1
+    tags: ['v*']     # e.g. v0.1 triggers release and Docker build with baked MODEL_VERSION
   pull_request:
 
 permissions:
-  contents: read
+  contents: write         # Needed to publish GitHub release
   packages: write
 
 concurrency:
@@ -17,9 +17,6 @@ concurrency:
 jobs:
   build-test-publish:
     runs-on: ubuntu-latest
-
-    env:
-      MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
 
     steps:
       - name: Checkout
@@ -31,18 +28,34 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
+      # ---- Lint (ruff) ----
       - name: Lint (ruff)
         run: |
-          python -m pip install -U pip
+          pip install -U pip
           pip install ruff
           ruff check .
 
+      # ---- Install, Train, Unit Tests ----
       - name: Install, Train, Unit Tests
+        env:
+          MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.1' }}
         run: |
           pip install -r requirements.txt pytest
           python src/train.py --model linear
           PYTHONPATH=$(pwd) pytest -q
 
+      # ---- Verify trained model exists ----
+      - name: Verify model file exists
+        run: |
+          CLEAN_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.1' }}
+          CLEAN_VERSION=${CLEAN_VERSION#v}  # remove leading 'v'
+          FILE=models/model_v${CLEAN_VERSION}.joblib
+          if [ ! -f "$FILE" ]; then
+            echo "Model file $FILE not found!"
+            exit 1
+          fi
+
+      # ---- Upload training artifacts ----
       - name: Upload training artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -51,10 +64,11 @@ jobs:
             artifacts/LinearRegression/model.pkl
             artifacts/LinearRegression/meta.json
             artifacts/LinearRegression/metrics.json
-            models/model_v${{ env.MODEL_VERSION }}.joblib
+            models/model_v0.1.joblib
             models/feature_list.json
           if-no-files-found: error
 
+      # ---- Docker meta (tags/labels) ----
       - name: Docker meta (tags/labels)
         id: meta
         uses: docker/metadata-action@v5
@@ -63,19 +77,12 @@ jobs:
           tags: |
             type=ref,event=tag
             type=ref,event=branch
-            type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Set up Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Check if model file exists
-        run: |
-          if [ ! -f models/model_v${MODEL_VERSION}.joblib ]; then
-            echo "Model file models/model_v${MODEL_VERSION}.joblib not found!"
-            exit 1
-          fi
-
+      # ---- Build (for smoke) ----
       - name: Build (load for smoke)
         uses: docker/build-push-action@v5
         with:
@@ -86,8 +93,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            MODEL_VERSION=${{ env.MODEL_VERSION }}
+            MODEL_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.1' }}
 
+      # ---- Smoke test container ----
       - name: Smoke test
         shell: bash
         run: |
@@ -105,6 +113,7 @@ jobs:
           echo "Healthcheck failed"
           exit 1
 
+      # ---- Login to GHCR ----
       - name: Login to GHCR
         if: ${{ github.event_name != 'pull_request' }}
         uses: docker/login-action@v3
@@ -113,6 +122,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ---- Build & Push Docker image ----
       - name: Build & Push
         if: ${{ github.event_name != 'pull_request' }}
         uses: docker/build-push-action@v5
@@ -124,16 +134,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            MODEL_VERSION=${{ env.MODEL_VERSION }}
+            MODEL_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.1' }}
 
+      # ---- Create GitHub Release ----
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
           generate_release_notes: true
           files: |
             artifacts/LinearRegression/metrics.json
             artifacts/LinearRegression/meta.json
-          token: ${{ secrets.GH_RELEASE_TOKEN }}
