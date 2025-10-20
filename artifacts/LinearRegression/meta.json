@@ -1,0 +1,6 @@
+{
+  "pipeline": "LinearRegression",
+  "version": "0.1",
+  "rmse": 53.85344583676594,
+  "trained_at": "2025-10-20T10:27:55.063648+00:00"
+}
