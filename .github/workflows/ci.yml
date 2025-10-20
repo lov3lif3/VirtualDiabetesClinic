@@ -3,7 +3,7 @@ name: CI & Publish
 on:
   push:
     branches: [main, master]
-    tags: ['v*']     # push tag v0.1 -> image :v0.1 and baked MODEL_VERSION=0.1 (no leading v)
+    tags: ['v*']     # push tag v0.1 -> image :v0.1 and baked MODEL_VERSION=0.1 (no leading 'v')
   pull_request:
 
 permissions:
@@ -17,6 +17,8 @@ concurrency:
 jobs:
   build-test-publish:
     runs-on: ubuntu-latest
+    env:
+      MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name && github.ref_name.slice(1) || '0.1' }}
 
     steps:
       - name: Checkout
@@ -37,8 +39,6 @@ jobs:
 
       # ---- Install, Train, Unit Tests ----
       - name: Install, Train, Unit Tests
-        env:
-          MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name && github.ref_name.substring(1) || '0.1' }}
         run: |
           pip install -r requirements.txt pytest
           python src/train.py --model linear
@@ -115,7 +115,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}   # includes :v0.1 when you push tag v0.1
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -134,9 +134,3 @@ jobs:
             artifacts/LinearRegression/metrics.json
             artifacts/LinearRegression/meta.json
           token: ${{ secrets.GH_RELEASE_TOKEN }}
-What I changed:
-The key fix is here, stripping the leading v from github.ref_name:
-
-yaml
-Kopiera kod
-MODEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name && github.ref_name.substring(1)
