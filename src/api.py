@@ -1,11 +1,19 @@
-# src/api.py (or src/main.py)
+from fastapi import FastAPI
+from fastapi import HTTPException
+from fastapi import Request
+from fastapi import Depends
 
-from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from pydantic import Field
+
 from pathlib import Path
 from contextlib import asynccontextmanager
-import os, json, joblib, numpy as np
+
+import os
+import json
+import joblib
+import numpy as np
 
 ART_DIR = Path("artifacts")
 MODEL_PATH = ART_DIR / "model.joblib"
@@ -42,7 +50,6 @@ class PredictResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.model = None
-    # default to ENV, then meta.json, then "unknown"
     version_env = os.getenv("MODEL_VERSION")
     app.state.meta = {"version": version_env or "unknown"}
     try:
@@ -50,7 +57,6 @@ async def lifespan(app: FastAPI):
             app.state.model = joblib.load(MODEL_PATH)
         if META_PATH.exists():
             meta = json.loads(META_PATH.read_text())
-            # ENV wins; otherwise use meta.json
             if not version_env:
                 app.state.meta = {"version": meta.get("version", "unknown")}
     except Exception:
@@ -81,9 +87,9 @@ def predict(payload: PredictRequest, request: Request, model=Depends(get_model))
         raise HTTPException(status_code=422, detail=str(e))
     X = np.asarray(vec, dtype=float).reshape(1, -1)
     try:
-        y = float(model.predict(X)[0])  # sklearn-like
+        y = float(model.predict(X)[0])
     except AttributeError:
-        y = float(model(X)[0])          # dummy lambda fallback
+        y = float(model(X)[0])
     return PredictResponse(
         prediction=y,
         model_version=request.app.state.meta.get("version", "unknown"),
